@@ -1,0 +1,15 @@
+# 生成目录（不入库）
+/elpa/
+/lsp-bridge/
+/.cache/
+/eln-cache/
+/auto-save-list/
+/tramp
+/tramp/
+/tree-sitter/
+*.elc
+__pycache__/
+.venv/
+
+# 本地文档快照（含内部路径，不入库）
+/TUI_IMPLEMENTATION.md

@@ -1,0 +1,70 @@
+;;; tui-colors-smoke.el --- Terminal brightness isolation checks -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'cl-lib)
+(setq user-emacs-directory
+      (file-name-as-directory
+       (expand-file-name ".." (file-name-directory load-file-name))))
+(load (expand-file-name "early-init.el" user-emacs-directory) nil t)
+(load (expand-file-name "init.el" user-emacs-directory) nil t)
+
+(ert-deftest colors-mild-brightening-preserves-distinct-color-families ()
+  (should (= (eval (car (get 'my-tui-syntax-brightness 'standard-value))) 0.15))
+  (should (equal (my-tui-lighten-rgb "#51afef" 0.15) "#6bbbf1"))
+  (should (equal (my-tui-lighten-rgb "#FD971F" 0.15) "#fda741"))
+  (should (equal (my-tui-lighten-rgb "#51afef" 0) "#51afef"))
+  (dolist (face '(ansi-color-red ansi-color-green ansi-color-yellow
+                  ansi-color-blue ansi-color-magenta ansi-color-cyan))
+    (should (memq face my-tui-brightened-syntax-faces)))
+  (should-error (my-tui-lighten-rgb "#51afef" -0.15) :type 'user-error))
+
+(ert-deftest colors-frame-overrides-do-not-touch-gui-or-background ()
+  (let ((my-tui-brightened-syntax-faces '(font-lock-keyword-face))
+        (my-tui-syntax-brightness 0.15)
+        applied)
+    (cl-letf (((symbol-function 'frame-live-p) (lambda (_) t))
+              ((symbol-function 'display-graphic-p) (lambda (frame) (eq frame 'gui)))
+              ((symbol-function 'display-color-cells)
+               (lambda (frame) (if (eq frame 'limited) 256 16777216)))
+              ((symbol-function 'my-tui-original-face-color) (lambda (&rest _) "#51afef"))
+              ((symbol-function 'set-face-foreground)
+               (lambda (face color frame) (push (list face color frame) applied))))
+      (my-tui-apply-syntax-brightness 'gui)
+      (my-tui-apply-syntax-brightness 'limited)
+      (should-not applied)
+      (my-tui-apply-syntax-brightness 'tty)
+      (my-tui-apply-syntax-brightness 'tty)
+      (should (equal applied '((font-lock-keyword-face "#6bbbf1" tty)
+                               (font-lock-keyword-face "#6bbbf1" tty)))))))
+
+(ert-deftest colors-theme-spec-remains-original-and-zero-restores-it ()
+  (let ((custom-enabled-themes '(tui-color-test))
+        (my-tui-brightened-syntax-faces '(font-lock-keyword-face))
+        applied)
+    (put 'tui-color-test 'theme-settings
+         '((theme-face font-lock-keyword-face tui-color-test ((t (:foreground "#51afef"))))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'frame-live-p) (lambda (_) t))
+                  ((symbol-function 'display-graphic-p) (lambda (_) nil))
+                  ((symbol-function 'display-color-cells) (lambda (_) 16777216))
+                  ((symbol-function 'face-spec-choose) (lambda (spec _) (cadar spec)))
+                  ((symbol-function 'set-face-foreground)
+                   (lambda (_face color _frame) (setq applied color))))
+          (let ((my-tui-syntax-brightness 0.15))
+            (my-tui-apply-syntax-brightness 'tty)
+            (should (equal applied "#6bbbf1")))
+          (should (equal (my-tui-original-face-color 'font-lock-keyword-face 'tty) "#51afef"))
+          (let ((my-tui-syntax-brightness 0))
+            (my-tui-apply-syntax-brightness 'tty)
+            (should (equal applied "#51afef"))))
+      (put 'tui-color-test 'theme-settings nil))))
+
+(ert-deftest colors-sidebar-headings-use-original-outline-palette ()
+  (dolist (entry my-tui-ink-heading-face-sources)
+    (should (memq (car entry) my-tui-brightened-syntax-faces))
+    (should-not (memq (cdr entry) my-tui-brightened-syntax-faces))
+    (should (equal (my-tui-original-face-color (car entry) (selected-frame))
+                   (my-tui-original-face-color (cdr entry) (selected-frame))))))
+
+(ert-run-tests-batch-and-exit)
+;;; tui-colors-smoke.el ends here

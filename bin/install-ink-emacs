@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Build the pinned reader plus the local Emacs output patch. Downloads only;
+# this script never publishes source, binaries, or configuration.
+set -euo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ink_version=0.15.0
+ink_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/ink-emacs"
+ink_bin_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
+
+if [[ $# -gt 1 ]]; then
+  echo "Usage: $0 [patched-source-directory]" >&2
+  exit 2
+fi
+
+mkdir -p "$ink_cache_dir" "$ink_bin_dir"
+if [[ $# -eq 1 ]]; then
+  ink_source_dir=$(cd -- "$1" && pwd)
+else
+  ink_unpack_dir=$(mktemp -d "$ink_cache_dir/source.XXXXXX")
+  trap 'rm -rf -- "$ink_unpack_dir"' EXIT
+  curl -fLsS --retry 2 --connect-timeout 15 --max-time 120 \
+    "https://rsproxy.cn/api/v1/crates/ink-md/$ink_version/download" \
+    -o "$ink_unpack_dir/ink.crate"
+  tar -xzf "$ink_unpack_dir/ink.crate" -C "$ink_unpack_dir"
+  ink_source_dir="$ink_unpack_dir/ink-md-$ink_version"
+  patch -d "$ink_source_dir" -p1 < "$script_dir/ink-emacs.patch"
+fi
+
+[[ -f "$ink_source_dir/src/render/sexp.rs" ]] || {
+  echo "Source is missing the Emacs S-expression extension" >&2
+  exit 1
+}
+
+cd -- "$ink_source_dir"
+cargo_config=()
+if ! grep -qs 'rsproxy' "${CARGO_HOME:-$HOME/.cargo}/config.toml" \
+     "${CARGO_HOME:-$HOME/.cargo}/config"; then
+  cargo_config=(--config 'source.crates-io.replace-with="rsproxy"' \
+                --config 'source.rsproxy.registry="sparse+https://rsproxy.cn/index/"')
+fi
+cargo build --release --locked --target-dir "$ink_source_dir/target" \
+  "${cargo_config[@]}"
+install -m 755 target/release/ink "$ink_bin_dir/ink-emacs"
+install -m 644 LICENSE "$ink_bin_dir/ink-emacs.LICENSE"
+echo "Installed $ink_bin_dir/ink-emacs; existing ink command is preserved."
